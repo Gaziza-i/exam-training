@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
 """
-Парсер открытого банка заданий ФИПИ (ege.fipi.ru/bank/).
+Парсер открытого банка заданий ФИПИ (ege.fipi.ru/bank/) на Playwright.
 
 ⚠️ ВАЖНО, ПРОЧТИТЕ ПЕРЕД ЗАПУСКОМ
 ----------------------------------
 Этот скрипт написан «вслепую»: на момент написания сайт ege.fipi.ru
 недоступен из среды, где я работаю (сеть блокирует прямые запросы к
 fipi.ru), поэтому я не могу открыть реальную страницу и подобрать точные
-CSS-селекторы под её текущую вёрстку. Каркас (сессия, пагинация, сохранение
-в нужном формате, вежливые паузы между запросами) рабочий, а вот функции
-`parse_task_list()` и `parse_task_detail()` — это лучшее предположение по
-структуре сайта, собранное по обрывкам публичной информации о нём
-(URL вида `index.php?proj=<GUID>&qid=<ID>`), и почти наверняка потребуют
-правки под реальную HTML-разметку.
+CSS-селекторы под её текущую вёрстку. Каркас (запуск браузера, пагинация,
+сохранение в нужном формате, вежливые паузы между запросами) рабочий, а вот
+функции `parse_task_list()` и `parse_task_detail()` — это лучшее
+предположение по структуре сайта и почти наверняка потребуют правки под
+реальную HTML-разметку.
+
+Почему Playwright, а не requests: обычный requests-скрипт зависал на
+TLS-подключении к сайту, хотя в обычном браузере сайт открывается — похоже
+на защиту от ботов по «отпечатку» TLS/браузера. Playwright запускает
+настоящий Chromium, поэтому для сайта он неотличим от обычного посетителя.
 
 Как довести до рабочего состояния (быстрее всего — через меня):
-1. Запустите скрипт с флагом --debug-dump — он сохранит сырой HTML
-   страниц в папку fipi_dump/.
+1. Запустите скрипт с флагом --debug-dump — он сохранит отрендеренный HTML
+   страниц (после выполнения JS) в папку fipi_dump/.
 2. Если задания не находятся (в консоли будет предупреждение) — пришлите
-   мне файл(ы) из fipi_dump/ (или просто вставьте кусок HTML вокруг одного
-   задания, скопированный через "Просмотр кода страницы" в браузере).
-   По реальной разметке я поправлю селекторы за один проход.
+   мне файл(ы) из fipi_dump/, я поправлю селекторы под реальную разметку.
 3. Альтернатива — сделать это самостоятельно: открыть DevTools (F12) на
    странице банка, найти блоки с текстом задания/вариантами ответа/кнопкой
    «показать ответ», и подставить правильные селекторы в функции ниже.
@@ -32,10 +34,15 @@ CSS-селекторы под её текущую вёрстку. Каркас (
   3. Скопируйте значение параметра proj из адресной строки, например:
      https://ege.fipi.ru/bank/index.php?proj=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
-Использование:
-    pip install requests beautifulsoup4
+Установка и использование:
+    pip install playwright beautifulsoup4
+    playwright install chromium
+
     python fipi_scraper.py --proj <GUID> --subject rus --out tasks_rus.json
     python fipi_scraper.py --proj <GUID> --subject rus --out tasks_rus.json --debug-dump --max-pages 2
+
+Если "python" у вас указывает на заглушку Windows Store — используйte
+"py" вместо "python" (как и раньше).
 
 Результат — JSON в формате, который понимает `manage.py import_fipi`:
     python manage.py import_fipi tasks_rus.json --subject rus
@@ -55,59 +62,51 @@ import sys
 import time
 from pathlib import Path
 
-import requests
 from bs4 import BeautifulSoup
+
+try:
+    from playwright.sync_api import Page, sync_playwright
+except ImportError:
+    print(
+        "Не найден пакет playwright. Установите:\n"
+        "    pip install playwright beautifulsoup4\n"
+        "    playwright install chromium\n"
+        "(если 'pip' не работает — используйте 'py -m pip install ...')",
+        file=sys.stderr,
+    )
+    raise
 
 BASE_URL = "https://ege.fipi.ru/bank/"
 DEFAULT_DELAY = 1.5  # секунд между запросами — не уменьшайте сильно, будьте вежливы к чужому серверу
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (compatible; ege-exam-trainer personal study tool; "
-        "+https://github.com/gaziza-i/exam-training)"
+
+
+def open_page(playwright, headless: bool) -> tuple[Page, "any"]:
+    browser = playwright.chromium.launch(headless=headless)
+    context = browser.new_context(
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        ),
+        locale="ru-RU",
     )
-}
+    page = context.new_page()
+    return page, browser
 
 
-def make_session(use_system_proxy: bool, timeout: int) -> requests.Session:
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    # По умолчанию игнорируем системные настройки прокси (переменные окружения
-    # HTTP_PROXY/HTTPS_PROXY или прокси из настроек Windows) — на некоторых
-    # компьютерах (VPN, антивирус с проверкой HTTPS, корпоративная сеть) такой
-    # прокси зависает при подключении к fipi.ru и требests просто висит до
-    # таймаута. Если без прокси у вас вообще нет доступа в интернет — запустите
-    # скрипт с флагом --use-system-proxy.
-    session.trust_env = use_system_proxy
+def goto(page: Page, url: str, debug_dump: Path | None, name: str, timeout_ms: int) -> BeautifulSoup:
+    page.goto(url, timeout=timeout_ms, wait_until="load")
     try:
-        # Первый запрос на index.php обычно выставляет сессионную куку, без
-        # которой сайт может не отдавать список заданий.
-        session.get(BASE_URL, timeout=timeout)
-    except requests.exceptions.RequestException as exc:
-        print(
-            f"\n⚠️  Не удалось подключиться к {BASE_URL}: {exc}\n"
-            "Проверьте:\n"
-            "  1) открывается ли этот адрес в обычном браузере на этом же компьютере;\n"
-            "  2) не включён ли VPN или антивирус с проверкой HTTPS-трафика — попробуйте "
-            "временно его отключить;\n"
-            "  3) если для доступа в интернет обязательно нужен прокси — запустите с "
-            "флагом --use-system-proxy;\n"
-            "  4) попробуйте увеличить время ожидания флагом --timeout 60.\n",
-            file=sys.stderr,
-        )
-        raise
-    return session
+        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+    except Exception:
+        pass  # некоторые страницы держат соединение открытым и никогда не "затихают" — не критично
 
-
-def fetch(session: requests.Session, url: str, params: dict, debug_dump: Path | None, name: str, timeout: int) -> BeautifulSoup:
-    resp = session.get(url, params=params, timeout=timeout)
-    resp.raise_for_status()
-    resp.encoding = resp.apparent_encoding or "utf-8"
+    html = page.content()
 
     if debug_dump:
         debug_dump.mkdir(parents=True, exist_ok=True)
-        (debug_dump / f"{name}.html").write_text(resp.text, encoding="utf-8")
+        (debug_dump / f"{name}.html").write_text(html, encoding="utf-8")
 
-    return BeautifulSoup(resp.text, "html.parser")
+    return BeautifulSoup(html, "html.parser")
 
 
 def parse_task_list(soup: BeautifulSoup) -> list[str]:
@@ -132,9 +131,7 @@ def parse_task_list(soup: BeautifulSoup) -> list[str]:
 def has_next_page(soup: BeautifulSoup, current_page: int) -> bool:
     """
     TODO(нужно подтвердить): предполагаем, что есть ссылка/кнопка «Далее»
-    или нумерация страниц вида ?page=N. Если пагинация устроена иначе
-    (например, через AJAX-подгрузку без смены URL) — этот скрипт её не
-    увидит, придётся адаптировать под реальный механизм.
+    или нумерация страниц вида ?page=N.
     """
     next_link = soup.select_one("a.next, a[rel='next'], a:-soup-contains('Далее')")
     if next_link:
@@ -149,16 +146,15 @@ def parse_task_detail(soup: BeautifulSoup, qid: str) -> dict | None:
     с отдельной страницы задания.
 
     TODO(нужно подтвердить на реальной странице): селекторы ниже —
-    предположения по распространённым паттернам подобных сайтов, а не
-    проверенная разметка ege.fipi.ru. Скорее всего понадобится правка.
-    Особые сложности, которые стоит иметь в виду:
+    предположения, а не проверенная разметка ege.fipi.ru. Особые
+    сложности, которые стоит иметь в виду:
       - часть заданий (особенно в математике) может рендериться как
         картинка с формулой, а не как текст — такие задания скрипт не
         сможет корректно перенести в текстовом виде без OCR;
-      - правильный ответ на сайте иногда открывается по клику
-        ("Показать ответ"), подгружаемому отдельным JS-запросом — тогда
-        потребуется найти этот endpoint через вкладку Network в DevTools
-        и дёрнуть его отдельным запросом.
+      - правильный ответ на сайте иногда открывается только по клику
+        ("Показать ответ") — тогда в parse_task_detail() нужно будет
+        сначала кликнуть по кнопке через page.click(...) перед тем, как
+        брать soup из page.content().
     """
     text_block = soup.select_one(".qtext, .task-text, .question, #task_text")
     if not text_block:
@@ -189,58 +185,62 @@ def scrape(
     max_pages: int,
     delay: float,
     debug_dump: Path | None,
-    use_system_proxy: bool,
+    headless: bool,
     timeout: int,
 ) -> list[dict]:
-    session = make_session(use_system_proxy, timeout)
     results: list[dict] = []
     seen_qids: set[str] = set()
+    timeout_ms = timeout * 1000
 
-    page = 1
-    while page <= max_pages:
-        params = {"proj": proj, "page": page}
-        if topic_number:
-            params["theme"] = topic_number  # TODO: подтвердить имя параметра темы
+    with sync_playwright() as pw:
+        page, browser = open_page(pw, headless)
+        try:
+            page_num = 1
+            while page_num <= max_pages:
+                url = f"{BASE_URL}index.php?proj={proj}&page={page_num}"
+                if topic_number:
+                    url += f"&theme={topic_number}"  # TODO: подтвердить имя параметра темы
 
-        print(f"[{subject_label}] Страница {page}…", file=sys.stderr)
-        list_soup = fetch(session, BASE_URL + "index.php", params, debug_dump, f"list_page_{page}", timeout)
-        qids = parse_task_list(list_soup)
+                print(f"[{subject_label}] Страница {page_num}…", file=sys.stderr)
+                list_soup = goto(page, url, debug_dump, f"list_page_{page_num}", timeout_ms)
+                qids = parse_task_list(list_soup)
 
-        if not qids:
-            print(
-                "  ⚠️  На странице не найдено ни одного задания. Похоже, селекторы "
-                "parse_task_list() не подходят под реальную вёрстку сайта — запустите "
-                "с --debug-dump и пришлите HTML для правки.",
-                file=sys.stderr,
-            )
-            break
+                if not qids:
+                    print(
+                        "  ⚠️  На странице не найдено ни одного задания. Похоже, селекторы "
+                        "parse_task_list() не подходят под реальную вёрстку сайта — запустите "
+                        "с --debug-dump и пришлите HTML для правки.",
+                        file=sys.stderr,
+                    )
+                    break
 
-        for qid in qids:
-            if qid in seen_qids:
-                continue
-            seen_qids.add(qid)
+                for qid in qids:
+                    if qid in seen_qids:
+                        continue
+                    seen_qids.add(qid)
 
-            time.sleep(delay)
-            detail_soup = fetch(
-                session, BASE_URL + "index.php", {"proj": proj, "qid": qid}, debug_dump, f"task_{qid}", timeout
-            )
-            task = parse_task_detail(detail_soup, qid)
-            if task is None:
-                print(f"  ⚠️  Не удалось разобрать задание qid={qid} — пропущено.", file=sys.stderr)
-                continue
+                    time.sleep(delay)
+                    detail_url = f"{BASE_URL}index.php?proj={proj}&qid={qid}"
+                    detail_soup = goto(page, detail_url, debug_dump, f"task_{qid}", timeout_ms)
+                    task = parse_task_detail(detail_soup, qid)
+                    if task is None:
+                        print(f"  ⚠️  Не удалось разобрать задание qid={qid} — пропущено.", file=sys.stderr)
+                        continue
 
-            task["topic_number"] = topic_number or 0
-            task["topic_title"] = ""
-            task["task_type"] = "choice" if task.get("options") else "short_answer"
-            task["difficulty"] = "base"
-            results.append(task)
-            print(f"  + qid={qid}: {task['text'][:60]}…", file=sys.stderr)
+                    task["topic_number"] = topic_number or 0
+                    task["topic_title"] = ""
+                    task["task_type"] = "choice" if task.get("options") else "short_answer"
+                    task["difficulty"] = "base"
+                    results.append(task)
+                    print(f"  + qid={qid}: {task['text'][:60]}…", file=sys.stderr)
 
-        if not has_next_page(list_soup, page):
-            break
+                if not has_next_page(list_soup, page_num):
+                    break
 
-        page += 1
-        time.sleep(delay)
+                page_num += 1
+                time.sleep(delay)
+        finally:
+            browser.close()
 
     return results
 
@@ -256,18 +256,14 @@ def main():
     parser.add_argument(
         "--debug-dump",
         action="store_true",
-        help="Сохранять сырой HTML каждой запрошенной страницы в папку fipi_dump/ — полезно для отладки селекторов",
+        help="Сохранять отрендеренный HTML каждой страницы в папку fipi_dump/ — полезно для отладки селекторов",
     )
     parser.add_argument(
-        "--use-system-proxy",
+        "--show-browser",
         action="store_true",
-        help=(
-            "Использовать системные настройки прокси (переменные окружения / прокси Windows). "
-            "По умолчанию скрипт их игнорирует — на некоторых компьютерах (VPN, антивирус с "
-            "проверкой HTTPS, корпоративная сеть) такой прокси зависает при подключении к fipi.ru."
-        ),
+        help="Показать окно браузера вместо headless-режима — полезно, чтобы увидеть глазами, что происходит",
     )
-    parser.add_argument("--timeout", type=int, default=20, help="Таймаут запроса в секундах (по умолчанию 20)")
+    parser.add_argument("--timeout", type=int, default=30, help="Таймаут загрузки страницы в секундах (по умолчанию 30)")
     args = parser.parse_args()
 
     debug_dir = Path("fipi_dump") if args.debug_dump else None
@@ -279,7 +275,7 @@ def main():
         max_pages=args.max_pages,
         delay=args.delay,
         debug_dump=debug_dir,
-        use_system_proxy=args.use_system_proxy,
+        headless=not args.show_browser,
         timeout=args.timeout,
     )
 
