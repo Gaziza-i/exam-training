@@ -8,9 +8,20 @@
 фронтенд может показывать пометку "демо-задание" рядом с ними.
 """
 
+from pathlib import Path
+
 from django.core.management.base import BaseCommand
 
 from exam.models import Subject, Task, Topic
+from exam.services.fipi_import import FipiImportError, import_tasks, load_tasks_json
+
+# Партии реальных заданий из открытого банка ФИПИ (текст и варианты — настоящие,
+# правильные ответы дозаполнены/проверены вручную, т.к. сайт их не публикует).
+# См. backend/data/ и exam/services/fipi_import.py.
+FIPI_DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
+FIPI_BATCHES = [
+    ("rus", FIPI_DATA_DIR / "fipi_rus_batch1.json"),
+]
 
 RUS_TOPICS = [
     (1, "Информация текста, главная мысль"),
@@ -596,6 +607,20 @@ class Command(BaseCommand):
 
         self._seed_subject(rus, RUS_TOPICS, RUS_TASKS)
         self._seed_subject(math, MATH_BASE_TOPICS, MATH_TASKS)
+
+        for subject_code, path in FIPI_BATCHES:
+            if not path.exists():
+                continue
+            try:
+                items = load_tasks_json(path)
+                stats = import_tasks(subject_code, items)
+            except FipiImportError as exc:
+                self.stdout.write(self.style.WARNING(f"Пропущен {path.name}: {exc}"))
+                continue
+            self.stdout.write(
+                f"{path.name}: заданий добавлено {stats.tasks_created}, "
+                f"обновлено {stats.tasks_updated}, пропущено {stats.tasks_skipped}"
+            )
 
         self.stdout.write(self.style.SUCCESS("Демо-данные готовы."))
 
