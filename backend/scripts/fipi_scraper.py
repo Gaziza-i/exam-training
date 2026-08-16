@@ -2,30 +2,19 @@
 """
 Парсер открытого банка заданий ФИПИ (ege.fipi.ru/bank/) на Playwright.
 
-⚠️ ВАЖНО, ПРОЧТИТЕ ПЕРЕД ЗАПУСКОМ
-----------------------------------
-Этот скрипт написан «вслепую»: на момент написания сайт ege.fipi.ru
-недоступен из среды, где я работаю (сеть блокирует прямые запросы к
-fipi.ru), поэтому я не могу открыть реальную страницу и подобрать точные
-CSS-селекторы под её текущую вёрстку. Каркас (запуск браузера, пагинация,
-сохранение в нужном формате, вежливые паузы между запросами) рабочий, а вот
-функции `parse_task_list()` и `parse_task_detail()` — это лучшее
-предположение по структуре сайта и почти наверняка потребуют правки под
-реальную HTML-разметку.
+СТАТУС: селекторы проверены на реальном HTML сайта (спасибо тестовому
+прогону) и вытаскивают текст задания, варианты ответа, тип ответа и код
+КЭС (темы) прямо со страницы списка — заходить на отдельную страницу
+каждого задания не нужно, там просто нет отдельной страницы: все данные
+уже в списке (`questions.php`).
 
-Почему Playwright, а не requests: обычный requests-скрипт зависал на
-TLS-подключении к сайту, хотя в обычном браузере сайт открывается — похоже
-на защиту от ботов по «отпечатку» TLS/браузера. Playwright запускает
-настоящий Chromium, поэтому для сайта он неотличим от обычного посетителя.
-
-Как довести до рабочего состояния (быстрее всего — через меня):
-1. Запустите скрипт с флагом --debug-dump — он сохранит отрендеренный HTML
-   страниц (после выполнения JS) в папку fipi_dump/.
-2. Если задания не находятся (в консоли будет предупреждение) — пришлите
-   мне файл(ы) из fipi_dump/, я поправлю селекторы под реальную разметку.
-3. Альтернатива — сделать это самостоятельно: открыть DevTools (F12) на
-   странице банка, найти блоки с текстом задания/вариантами ответа/кнопкой
-   «показать ответ», и подставить правильные селекторы в функции ниже.
+⚠️ ГЛАВНОЕ ОГРАНИЧЕНИЕ: сайт НЕ публикует правильные ответы в HTML.
+Кнопка «Ответить» отправляет ваш ответ на сервер (`solve.php`) и получает
+в ответ только «верно/неверно/решено» — без текста самого правильного
+ответа. Это осознанная защита от списывания, и обойти её просто скрапингом
+нельзя. Поэтому в выгруженном JSON поле `correct_answer` всегда пустое —
+дозаполнить его придётся вручную (или прислать выгрузку человеку/ИИ,
+который умеет решать эти задания).
 
 Как получить proj (GUID предмета):
   1. Откройте https://ege.fipi.ru/bank/ в браузере.
@@ -34,24 +23,23 @@ TLS-подключении к сайту, хотя в обычном брауз�
   3. Скопируйте значение параметра proj из адресной строки, например:
      https://ege.fipi.ru/bank/index.php?proj=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
-Установка и использование:
+Установка и использование (Windows: используйте `py` вместо `python`, если
+`python` у вас указывает на заглушку Microsoft Store):
     pip install playwright beautifulsoup4
     playwright install chromium
 
     python fipi_scraper.py --proj <GUID> --subject rus --out tasks_rus.json
-    python fipi_scraper.py --proj <GUID> --subject rus --out tasks_rus.json --debug-dump --max-pages 2
+    python fipi_scraper.py --proj <GUID> --subject rus --out tasks_rus.json --max-pages 5
 
-Если "python" у вас указывает на заглушку Windows Store — используйte
-"py" вместо "python" (как и раньше).
+Результат — JSON с текстами реальных заданий ФИПИ (без ответов). Дальше:
+  1. Пришлите файл сюда в чат (или его часть) — дозаполню correct_answer.
+  2. Импортируйте дозаполненный файл: python manage.py import_fipi tasks_rus.json --subject rus
 
-Результат — JSON в формате, который понимает `manage.py import_fipi`:
-    python manage.py import_fipi tasks_rus.json --subject rus
-
-Пожалуйста, уважайте сайт: скрипт по умолчанию делает паузу между запросами
-и не запускает параллельные потоки. Открытый банк создан для бесплатного
-использования школьниками при подготовке к экзаменам — не превращайте
-скрипт в источник нагрузки на чужой сервер и не запускайте его на весь банк
-целиком за один присест.
+Пожалуйста, уважайте сайт: скрипт по умолчанию делает паузу между
+страницами и не запускает параллельные потоки. Открытый банк создан для
+бесплатного использования школьниками при подготовке к экзаменам — не
+превращайте скрипт в источник нагрузки на чужой сервер и не выкачивайте
+весь банк (в нём тысячи заданий) за один присест.
 """
 
 from __future__ import annotations
@@ -77,7 +65,8 @@ except ImportError:
     raise
 
 BASE_URL = "https://ege.fipi.ru/bank/"
-DEFAULT_DELAY = 1.5  # секунд между запросами — не уменьшайте сильно, будьте вежливы к чужому серверу
+DEFAULT_DELAY = 1.5  # секунд между страницами — не уменьшайте сильно, будьте вежливы к чужому серверу
+PAGE_SIZE = 10  # как на сайте по умолчанию (hidden-поле pagesize в форме фильтров)
 
 
 def open_page(playwright, headless: bool) -> tuple[Page, "any"]:
@@ -109,67 +98,72 @@ def goto(page: Page, url: str, debug_dump: Path | None, name: str, timeout_ms: i
     return BeautifulSoup(html, "html.parser")
 
 
-def parse_task_list(soup: BeautifulSoup) -> list[str]:
+def parse_tasks(soup: BeautifulSoup) -> list[dict]:
     """
-    Возвращает список qid найденных на странице заданий.
-
-    TODO(нужно подтвердить на реальной странице): ниже — предположение,
-    что каждое задание на странице списка обёрнуто в ссылку вида
-    `index.php?proj=...&qid=XXXXXX`. Если это не так — пришлите мне HTML
-    из fipi_dump/list_page_*.html, поправлю разбор.
+    Разбирает страницу списка заданий (questions.php). Каждое задание —
+    это пара блоков <div class="qblock" id="qXXXXXX"> (текст + форма
+    ответа) и <div id="iXXXXXX"> (метаданные: КЭС, тип ответа, номер).
     """
-    qids: list[str] = []
-    for link in soup.select("a[href*='qid=']"):
-        href = link.get("href", "")
-        if "qid=" in href:
-            qid = href.split("qid=")[-1].split("&")[0]
-            if qid and qid not in qids:
-                qids.append(qid)
-    return qids
+    tasks: list[dict] = []
 
+    for qblock in soup.select("div.qblock"):
+        block_id = qblock.get("id", "")
+        if not block_id.startswith("q"):
+            continue
+        qid = block_id[1:]
 
-def parse_task_detail(soup: BeautifulSoup, qid: str) -> dict | None:
-    """
-    Извлекает текст задания, варианты ответа (если есть) и верный ответ
-    с отдельной страницы задания.
+        text_cell = qblock.select_one("td.cell_0")
+        if not text_cell:
+            continue
+        text = text_cell.get_text("\n", strip=True)
 
-    TODO(нужно подтвердить на реальной странице): селекторы ниже —
-    предположения, а не проверенная разметка ege.fipi.ru. Особые
-    сложности, которые стоит иметь в виду:
-      - часть заданий (особенно в математике) может рендериться как
-        картинка с формулой, а не как текст — такие задания скрипт не
-        сможет корректно перенести в текстовом виде без OCR;
-      - правильный ответ на сайте иногда открывается только по клику
-        ("Показать ответ") — тогда в parse_task_detail() нужно будет
-        сначала кликнуть по кнопке через page.click(...) перед тем, как
-        брать soup из page.content().
-    """
-    text_block = soup.select_one(".qtext, .task-text, .question, #task_text")
-    if not text_block:
-        return None
-    text = text_block.get_text("\n", strip=True)
+        # Варианты ответа — есть только у заданий с чекбоксами/радио
+        # (distractors-table); у заданий с текстовым полем вариантов нет.
+        options = []
+        for row in qblock.select(".distractors-table tr"):
+            cells = row.select("td")
+            if len(cells) >= 3:
+                option_text = cells[-1].get_text(" ", strip=True)
+                if option_text:
+                    options.append(option_text)
 
-    options = None
-    option_nodes = soup.select(".answer-options li, .qanswer li, .options li")
-    if option_nodes:
-        options = [o.get_text(" ", strip=True) for o in option_nodes]
+        # Метаданные (КЭС, тип ответа) лежат в соседнем блоке #i<qid>
+        info_block = soup.select_one(f"#i{qid}")
+        kes_codes: list[str] = []
+        answer_type_label = ""
+        if info_block:
+            for row in info_block.select(".task-info-content table tr"):
+                cells = row.select("td")
+                if len(cells) < 2:
+                    continue
+                label = cells[0].get_text(strip=True)
+                if label == "КЭС:":
+                    kes_codes = [d.get_text(" ", strip=True) for d in cells[1].select("div")]
+                elif label == "Тип ответа:":
+                    answer_type_label = cells[1].get_text(strip=True)
 
-    answer_block = soup.select_one(".qanswer, .correct-answer, .answer, #answer")
-    correct_answer = answer_block.get_text(" ", strip=True) if answer_block else ""
+        tasks.append(
+            {
+                "fipi_id": qid,
+                "text": text,
+                "options": options or None,
+                "task_type": "choice" if options else "short_answer",
+                "correct_answer": "",  # сайт не публикует ответы — заполняется вручную
+                "explanation": "",
+                "kes_codes": kes_codes,  # коды тем КЭС, напр. "3.8.6 Знаки препинания..."
+                "answer_type_label": answer_type_label,  # как на сайте: "Краткий ответ" и т.п.
+                "topic_number": 0,  # нужно сопоставить с номером задания КИМ вручную/через import
+                "topic_title": "",
+                "difficulty": "base",
+            }
+        )
 
-    return {
-        "fipi_id": qid,
-        "text": text,
-        "options": options,
-        "correct_answer": correct_answer,
-        "explanation": "",
-    }
+    return tasks
 
 
 def scrape(
     proj: str,
     subject_label: str,
-    topic_number: int | None,
     max_pages: int,
     delay: float,
     debug_dump: Path | None,
@@ -183,56 +177,37 @@ def scrape(
     with sync_playwright() as pw:
         page, browser = open_page(pw, headless)
         try:
-            # Список заданий на index.php реально не находится — он подгружается
-            # отдельной страницей questions.php внутрь <iframe id="questions_container">.
-            # Поэтому сначала один раз открываем index.php (получить сессию/куки),
-            # а затем ходим напрямую в questions.php за списком заданий.
             print(f"[{subject_label}] Открываю index.php (сессия)…", file=sys.stderr)
             goto(page, f"{BASE_URL}index.php?proj={proj}", debug_dump, "index", timeout_ms)
 
-            pagesize = 10  # как на сайте по умолчанию (см. hidden-поле pagesize в форме фильтров)
             page_num = 1
             while page_num <= max_pages:
-                # page на сайте считается с 0, поэтому page_num-1
-                url = f"{BASE_URL}questions.php?proj={proj}&page={page_num - 1}&pagesize={pagesize}"
-                if topic_number:
-                    url += f"&theme={topic_number}"  # TODO: подтвердить, что фильтр по теме так работает через GET
+                # На сайте нумерация страниц с 0, поэтому page_num-1.
+                url = f"{BASE_URL}questions.php?proj={proj}&page={page_num - 1}&pagesize={PAGE_SIZE}"
 
-                print(f"[{subject_label}] Страница {page_num} (questions.php)…", file=sys.stderr)
+                print(f"[{subject_label}] Страница {page_num}…", file=sys.stderr)
                 list_soup = goto(page, url, debug_dump, f"list_page_{page_num}", timeout_ms)
-                qids = parse_task_list(list_soup)
+                page_tasks = parse_tasks(list_soup)
 
-                if not qids:
+                if not page_tasks:
                     print(
-                        "  ⚠️  На странице не найдено ни одного задания. Похоже, селекторы "
-                        "parse_task_list() не подходят под реальную вёрстку questions.php — запустите "
-                        "с --debug-dump и пришлите HTML файла list_page_1.html для правки.",
+                        "  ⚠️  На странице не найдено ни одного задания. Возможно, вёрстка сайта "
+                        "снова изменилась — пришлите HTML файла list_page_N.html для правки.",
                         file=sys.stderr,
                     )
                     break
 
-                for qid in qids:
-                    if qid in seen_qids:
+                new_count = 0
+                for task in page_tasks:
+                    if task["fipi_id"] in seen_qids:
                         continue
-                    seen_qids.add(qid)
-
-                    time.sleep(delay)
-                    detail_url = f"{BASE_URL}index.php?proj={proj}&qid={qid}"
-                    detail_soup = goto(page, detail_url, debug_dump, f"task_{qid}", timeout_ms)
-                    task = parse_task_detail(detail_soup, qid)
-                    if task is None:
-                        print(f"  ⚠️  Не удалось разобрать задание qid={qid} — пропущено.", file=sys.stderr)
-                        continue
-
-                    task["topic_number"] = topic_number or 0
-                    task["topic_title"] = ""
-                    task["task_type"] = "choice" if task.get("options") else "short_answer"
-                    task["difficulty"] = "base"
+                    seen_qids.add(task["fipi_id"])
                     results.append(task)
-                    print(f"  + qid={qid}: {task['text'][:60]}…", file=sys.stderr)
+                    new_count += 1
+                    print(f"  + {task['fipi_id']}: {task['text'][:60]}…", file=sys.stderr)
 
-                if len(qids) < pagesize:
-                    break  # последняя страница — заданий меньше полного размера страницы
+                if len(page_tasks) < PAGE_SIZE or new_count == 0:
+                    break  # последняя страница — заданий меньше полного размера, либо повтор
 
                 page_num += 1
                 time.sleep(delay)
@@ -246,19 +221,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--proj", required=True, help="GUID предмета из URL банка (параметр proj)")
     parser.add_argument("--subject", required=True, help="Метка предмета для лога, например rus или math_base")
-    parser.add_argument("--topic", type=int, default=None, help="Номер темы/задания КИМ (если фильтруете по теме)")
     parser.add_argument("--out", required=True, help="Путь к выходному JSON-файлу")
-    parser.add_argument("--max-pages", type=int, default=3, help="Сколько страниц списка обойти (по умолчанию 3)")
-    parser.add_argument("--delay", type=float, default=DEFAULT_DELAY, help="Пауза между запросами, сек")
+    parser.add_argument("--max-pages", type=int, default=3, help="Сколько страниц списка обойти (по умолчанию 3, 10 заданий на странице)")
+    parser.add_argument("--delay", type=float, default=DEFAULT_DELAY, help="Пауза между страницами, сек")
     parser.add_argument(
         "--debug-dump",
         action="store_true",
-        help="Сохранять отрендеренный HTML каждой страницы в папку fipi_dump/ — полезно для отладки селекторов",
+        help="Сохранять отрендеренный HTML каждой страницы в папку fipi_dump/ — полезно для отладки",
     )
     parser.add_argument(
         "--show-browser",
         action="store_true",
-        help="Показать окно браузера вместо headless-режима — полезно, чтобы увидеть глазами, что происходит",
+        help="Показать окно браузера вместо headless-режима",
     )
     parser.add_argument("--timeout", type=int, default=30, help="Таймаут загрузки страницы в секундах (по умолчанию 30)")
     args = parser.parse_args()
@@ -268,7 +242,6 @@ def main():
     tasks = scrape(
         proj=args.proj,
         subject_label=args.subject,
-        topic_number=args.topic,
         max_pages=args.max_pages,
         delay=args.delay,
         debug_dump=debug_dir,
@@ -281,10 +254,15 @@ def main():
     print(f"\nГотово: {len(tasks)} заданий сохранено в {out_path}", file=sys.stderr)
     if debug_dir:
         print(f"Отладочный HTML сохранён в {debug_dir}/", file=sys.stderr)
-    if not tasks:
+    if tasks:
         print(
-            "\nЗаданий не найдено — почти наверняка нужно поправить селекторы под "
-            "реальную разметку сайта (см. TODO в начале файла и в функциях parse_*).",
+            "\n⚠️  correct_answer у всех заданий пустой — сайт не публикует ответы. "
+            "Пришлите этот файл сюда в чат, дозаполню ответы вручную перед импортом.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "\nЗаданий не найдено — вёрстка сайта могла снова измениться (см. --debug-dump).",
             file=sys.stderr,
         )
 
