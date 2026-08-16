@@ -172,6 +172,7 @@ def scrape(
     debug_dump: Path | None,
     headless: bool,
     timeout: int,
+    start_page: int = 1,
 ) -> list[dict]:
     results: list[dict] = []
     seen_qids: set[str] = set()
@@ -183,8 +184,9 @@ def scrape(
             print(f"[{subject_label}] Открываю index.php (сессия)…", file=sys.stderr)
             goto(page, f"{BASE_URL}index.php?proj={proj}", debug_dump, "index", timeout_ms)
 
-            page_num = 1
-            while page_num <= max_pages:
+            page_num = start_page
+            last_page = start_page + max_pages - 1
+            while page_num <= last_page:
                 # На сайте нумерация страниц с 0, поэтому page_num-1.
                 url = f"{BASE_URL}questions.php?proj={proj}&page={page_num - 1}&pagesize={PAGE_SIZE}"
 
@@ -238,6 +240,12 @@ def main():
         help="Показать окно браузера вместо headless-режима",
     )
     parser.add_argument("--timeout", type=int, default=30, help="Таймаут загрузки страницы в секундах (по умолчанию 30)")
+    parser.add_argument(
+        "--start-page",
+        type=int,
+        default=1,
+        help="С какой страницы начинать (по умолчанию 1) — используйте, чтобы не скачивать заново уже собранные страницы",
+    )
     args = parser.parse_args()
 
     debug_dir = Path("fipi_dump") if args.debug_dump else None
@@ -250,6 +258,7 @@ def main():
         debug_dump=debug_dir,
         headless=not args.show_browser,
         timeout=args.timeout,
+        start_page=args.start_page,
     )
 
     out_path = Path(args.out)
