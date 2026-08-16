@@ -83,7 +83,10 @@ def open_page(playwright, headless: bool) -> tuple[Page, "any"]:
 
 
 def goto(page: Page, url: str, debug_dump: Path | None, name: str, timeout_ms: int) -> BeautifulSoup:
-    page.goto(url, timeout=timeout_ms, wait_until="load")
+    # "load" ждёт вообще всех ресурсов страницы (включая шрифты для формул с
+    # внешнего CDN) и может зависать надолго/навсегда — используем менее
+    # строгое условие, нам нужен только готовый HTML.
+    page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
     try:
         page.wait_for_load_state("networkidle", timeout=timeout_ms)
     except Exception:
