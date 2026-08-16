@@ -62,10 +62,15 @@ npm run dev
 
 ## Загрузка заданий из ФИПИ
 
-ФИПИ не публикует официальный API, поэтому задания нужно получить парсером
-(например, доработанным под открытый банк ФИПИ скриптом на requests/bs4) и
+ФИПИ не публикует официальный API, поэтому задания нужно получить парсером и
 передать в приложение в виде JSON. Формат и подробности — в
 [`backend/exam/services/fipi_import.py`](backend/exam/services/fipi_import.py).
+
+В [`backend/scripts/fipi_scraper.py`](backend/scripts/fipi_scraper.py) есть
+черновик такого парсера на requests + BeautifulSoup (см.
+[`backend/scripts/README.md`](backend/scripts/README.md) — он ещё не
+проверен на реальной странице сайта и почти наверняка потребует правки
+селекторов под её текущую вёрстку).
 
 ```bash
 python manage.py import_fipi path/to/rus_tasks.json --subject rus
