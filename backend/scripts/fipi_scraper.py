@@ -68,17 +68,38 @@ HEADERS = {
 }
 
 
-def make_session() -> requests.Session:
+def make_session(use_system_proxy: bool, timeout: int) -> requests.Session:
     session = requests.Session()
     session.headers.update(HEADERS)
-    # Первый запрос на index.php обычно выставляет сессионную куку, без
-    # которой сайт может не отдавать список заданий.
-    session.get(BASE_URL, timeout=20)
+    # По умолчанию игнорируем системные настройки прокси (переменные окружения
+    # HTTP_PROXY/HTTPS_PROXY или прокси из настроек Windows) — на некоторых
+    # компьютерах (VPN, антивирус с проверкой HTTPS, корпоративная сеть) такой
+    # прокси зависает при подключении к fipi.ru и требests просто висит до
+    # таймаута. Если без прокси у вас вообще нет доступа в интернет — запустите
+    # скрипт с флагом --use-system-proxy.
+    session.trust_env = use_system_proxy
+    try:
+        # Первый запрос на index.php обычно выставляет сессионную куку, без
+        # которой сайт может не отдавать список заданий.
+        session.get(BASE_URL, timeout=timeout)
+    except requests.exceptions.RequestException as exc:
+        print(
+            f"\n⚠️  Не удалось подключиться к {BASE_URL}: {exc}\n"
+            "Проверьте:\n"
+            "  1) открывается ли этот адрес в обычном браузере на этом же компьютере;\n"
+            "  2) не включён ли VPN или антивирус с проверкой HTTPS-трафика — попробуйте "
+            "временно его отключить;\n"
+            "  3) если для доступа в интернет обязательно нужен прокси — запустите с "
+            "флагом --use-system-proxy;\n"
+            "  4) попробуйте увеличить время ожидания флагом --timeout 60.\n",
+            file=sys.stderr,
+        )
+        raise
     return session
 
 
-def fetch(session: requests.Session, url: str, params: dict, debug_dump: Path | None, name: str) -> BeautifulSoup:
-    resp = session.get(url, params=params, timeout=20)
+def fetch(session: requests.Session, url: str, params: dict, debug_dump: Path | None, name: str, timeout: int) -> BeautifulSoup:
+    resp = session.get(url, params=params, timeout=timeout)
     resp.raise_for_status()
     resp.encoding = resp.apparent_encoding or "utf-8"
 
@@ -168,8 +189,10 @@ def scrape(
     max_pages: int,
     delay: float,
     debug_dump: Path | None,
+    use_system_proxy: bool,
+    timeout: int,
 ) -> list[dict]:
-    session = make_session()
+    session = make_session(use_system_proxy, timeout)
     results: list[dict] = []
     seen_qids: set[str] = set()
 
@@ -180,7 +203,7 @@ def scrape(
             params["theme"] = topic_number  # TODO: подтвердить имя параметра темы
 
         print(f"[{subject_label}] Страница {page}…", file=sys.stderr)
-        list_soup = fetch(session, BASE_URL + "index.php", params, debug_dump, f"list_page_{page}")
+        list_soup = fetch(session, BASE_URL + "index.php", params, debug_dump, f"list_page_{page}", timeout)
         qids = parse_task_list(list_soup)
 
         if not qids:
@@ -199,7 +222,7 @@ def scrape(
 
             time.sleep(delay)
             detail_soup = fetch(
-                session, BASE_URL + "index.php", {"proj": proj, "qid": qid}, debug_dump, f"task_{qid}"
+                session, BASE_URL + "index.php", {"proj": proj, "qid": qid}, debug_dump, f"task_{qid}", timeout
             )
             task = parse_task_detail(detail_soup, qid)
             if task is None:
@@ -235,6 +258,16 @@ def main():
         action="store_true",
         help="Сохранять сырой HTML каждой запрошенной страницы в папку fipi_dump/ — полезно для отладки селекторов",
     )
+    parser.add_argument(
+        "--use-system-proxy",
+        action="store_true",
+        help=(
+            "Использовать системные настройки прокси (переменные окружения / прокси Windows). "
+            "По умолчанию скрипт их игнорирует — на некоторых компьютерах (VPN, антивирус с "
+            "проверкой HTTPS, корпоративная сеть) такой прокси зависает при подключении к fipi.ru."
+        ),
+    )
+    parser.add_argument("--timeout", type=int, default=20, help="Таймаут запроса в секундах (по умолчанию 20)")
     args = parser.parse_args()
 
     debug_dir = Path("fipi_dump") if args.debug_dump else None
@@ -246,6 +279,8 @@ def main():
         max_pages=args.max_pages,
         delay=args.delay,
         debug_dump=debug_dir,
+        use_system_proxy=args.use_system_proxy,
+        timeout=args.timeout,
     )
 
     out_path = Path(args.out)
