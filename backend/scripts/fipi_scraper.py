@@ -128,18 +128,6 @@ def parse_task_list(soup: BeautifulSoup) -> list[str]:
     return qids
 
 
-def has_next_page(soup: BeautifulSoup, current_page: int) -> bool:
-    """
-    TODO(нужно подтвердить): предполагаем, что есть ссылка/кнопка «Далее»
-    или нумерация страниц вида ?page=N.
-    """
-    next_link = soup.select_one("a.next, a[rel='next'], a:-soup-contains('Далее')")
-    if next_link:
-        return True
-    page_links = soup.select(f"a[href*='page={current_page + 1}']")
-    return bool(page_links)
-
-
 def parse_task_detail(soup: BeautifulSoup, qid: str) -> dict | None:
     """
     Извлекает текст задания, варианты ответа (если есть) и верный ответ
@@ -195,21 +183,30 @@ def scrape(
     with sync_playwright() as pw:
         page, browser = open_page(pw, headless)
         try:
+            # Список заданий на index.php реально не находится — он подгружается
+            # отдельной страницей questions.php внутрь <iframe id="questions_container">.
+            # Поэтому сначала один раз открываем index.php (получить сессию/куки),
+            # а затем ходим напрямую в questions.php за списком заданий.
+            print(f"[{subject_label}] Открываю index.php (сессия)…", file=sys.stderr)
+            goto(page, f"{BASE_URL}index.php?proj={proj}", debug_dump, "index", timeout_ms)
+
+            pagesize = 10  # как на сайте по умолчанию (см. hidden-поле pagesize в форме фильтров)
             page_num = 1
             while page_num <= max_pages:
-                url = f"{BASE_URL}index.php?proj={proj}&page={page_num}"
+                # page на сайте считается с 0, поэтому page_num-1
+                url = f"{BASE_URL}questions.php?proj={proj}&page={page_num - 1}&pagesize={pagesize}"
                 if topic_number:
-                    url += f"&theme={topic_number}"  # TODO: подтвердить имя параметра темы
+                    url += f"&theme={topic_number}"  # TODO: подтвердить, что фильтр по теме так работает через GET
 
-                print(f"[{subject_label}] Страница {page_num}…", file=sys.stderr)
+                print(f"[{subject_label}] Страница {page_num} (questions.php)…", file=sys.stderr)
                 list_soup = goto(page, url, debug_dump, f"list_page_{page_num}", timeout_ms)
                 qids = parse_task_list(list_soup)
 
                 if not qids:
                     print(
                         "  ⚠️  На странице не найдено ни одного задания. Похоже, селекторы "
-                        "parse_task_list() не подходят под реальную вёрстку сайта — запустите "
-                        "с --debug-dump и пришлите HTML для правки.",
+                        "parse_task_list() не подходят под реальную вёрстку questions.php — запустите "
+                        "с --debug-dump и пришлите HTML файла list_page_1.html для правки.",
                         file=sys.stderr,
                     )
                     break
@@ -234,8 +231,8 @@ def scrape(
                     results.append(task)
                     print(f"  + qid={qid}: {task['text'][:60]}…", file=sys.stderr)
 
-                if not has_next_page(list_soup, page_num):
-                    break
+                if len(qids) < pagesize:
+                    break  # последняя страница — заданий меньше полного размера страницы
 
                 page_num += 1
                 time.sleep(delay)
