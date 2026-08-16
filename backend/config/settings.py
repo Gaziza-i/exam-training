@@ -118,7 +118,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # CORS: allow the React dev server and the deployed frontend to call the API.
 CORS_ALLOWED_ORIGINS = [
-    o.strip()
+    o.strip().rstrip("/")
     for o in os.environ.get(
         "CORS_ALLOWED_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173",
