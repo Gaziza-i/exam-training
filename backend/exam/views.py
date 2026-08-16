@@ -120,12 +120,36 @@ class ExamVariantViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def finish(self, request, pk=None):
         variant = self.get_object()
-        correct = variant.attempts.filter(is_correct=True).count()
+        # Берём последнюю попытку по каждому заданию — на случай повторной отправки.
+        attempts_by_task = {}
+        for attempt in variant.attempts.order_by("created_at"):
+            attempts_by_task[attempt.task_id] = attempt
+
+        correct = sum(1 for a in attempts_by_task.values() if a.is_correct)
         variant.status = ExamVariant.STATUS_FINISHED
         variant.finished_at = timezone.now()
         variant.score = correct
         variant.save()
-        return Response(ExamVariantSerializer(variant).data)
+
+        review = []
+        for task in variant.tasks.all():
+            attempt = attempts_by_task.get(task.id)
+            review.append(
+                {
+                    "task_id": task.id,
+                    "text": task.text,
+                    "task_type": task.task_type,
+                    "options": task.options,
+                    "user_answer": attempt.user_answer if attempt else "",
+                    "is_correct": attempt.is_correct if attempt else False,
+                    "correct_answer": task.correct_answer,
+                    "explanation": task.explanation,
+                }
+            )
+
+        data = ExamVariantSerializer(variant).data
+        data["review"] = review
+        return Response(data)
 
 
 class EssayAttemptViewSet(viewsets.ModelViewSet):

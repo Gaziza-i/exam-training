@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api } from "../api.js";
+import { api, formatAnswer } from "../api.js";
 import Card from "../components/Card.jsx";
 
 function formatTime(totalSeconds) {
@@ -98,18 +98,42 @@ export default function ExamMode() {
 
   if (finished) {
     return (
-      <Card className="max-w-xl">
-        <h2 className="text-lg font-semibold mb-2">Вариант завершён</h2>
-        <p className="text-slate-600 dark:text-slate-300">
-          Правильных ответов: <b>{finished.score}</b> из <b>{finished.tasks.length}</b>
-        </p>
-        <button
-          onClick={() => setVariant(null)}
-          className="mt-4 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
-        >
-          Начать новый вариант
-        </button>
-      </Card>
+      <div className="space-y-4 max-w-2xl">
+        <Card>
+          <h2 className="text-lg font-semibold mb-2">Вариант завершён</h2>
+          <p className="text-slate-600 dark:text-slate-300">
+            Правильных ответов: <b>{finished.score}</b> из <b>{finished.tasks.length}</b>
+          </p>
+          <button
+            onClick={() => setVariant(null)}
+            className="mt-4 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
+          >
+            Начать новый вариант
+          </button>
+        </Card>
+
+        <h3 className="font-medium text-slate-700 dark:text-slate-200">Разбор заданий</h3>
+        {(finished.review || []).map((r, i) => (
+          <Card key={r.task_id}>
+            <div className="text-xs text-slate-400 mb-1">Задание {i + 1}</div>
+            <p className="whitespace-pre-line mb-3 text-slate-800 dark:text-slate-200">{r.text}</p>
+            <div
+              className={`inline-block px-3 py-1.5 rounded-lg text-sm font-medium ${
+                r.is_correct
+                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                  : "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300"
+              }`}
+            >
+              {r.is_correct
+                ? "Верно ✅"
+                : r.user_answer
+                  ? `Неверно. Ваш ответ: «${r.user_answer}». Правильный ответ: ${formatAnswer(r.correct_answer)}`
+                  : `Без ответа. Правильный ответ: ${formatAnswer(r.correct_answer)}`}
+            </div>
+            {r.explanation && <p className="text-sm text-slate-500 mt-2">{r.explanation}</p>}
+          </Card>
+        ))}
+      </div>
     );
   }
 

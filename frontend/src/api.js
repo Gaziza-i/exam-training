@@ -1,5 +1,12 @@
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api";
 
+// Некоторые задания хранят несколько допустимых форм ответа через "|"
+// (например "0.5|0,5"). Для показа пользователю берём только первый вариант.
+export function formatAnswer(correctAnswer) {
+  if (!correctAnswer) return correctAnswer;
+  return correctAnswer.split("|")[0];
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`${API_URL}${path}`, {
     headers: { "Content-Type": "application/json" },

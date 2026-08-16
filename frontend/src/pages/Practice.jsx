@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api.js";
+import { api, formatAnswer } from "../api.js";
 import Card from "../components/Card.jsx";
 
 export default function Practice() {
@@ -11,6 +11,7 @@ export default function Practice() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sessionStats, setSessionStats] = useState({ correct: 0, total: 0 });
+  const [history, setHistory] = useState([]);
 
   useEffect(() => {
     setLoading(true);
@@ -31,6 +32,16 @@ export default function Practice() {
       correct: s.correct + (res.is_correct ? 1 : 0),
       total: s.total + 1,
     }));
+    setHistory((h) => [
+      ...h,
+      {
+        task,
+        userAnswer: answer.trim(),
+        isCorrect: res.is_correct,
+        correctAnswer: res.correct_answer,
+        explanation: res.explanation,
+      },
+    ]);
   };
 
   const next = () => {
@@ -43,16 +54,42 @@ export default function Practice() {
 
   if (!task) {
     return (
-      <Card>
-        <p className="mb-3">
-          {tasks.length === 0
-            ? "Для этой темы пока нет заданий в базе."
-            : `Задания закончились. Правильных ответов: ${sessionStats.correct} из ${sessionStats.total}.`}
-        </p>
-        <Link to="/topics" className="text-indigo-600 hover:underline text-sm">
-          ← Вернуться к темам
-        </Link>
-      </Card>
+      <div className="space-y-4 max-w-2xl">
+        <Card>
+          <p className="mb-3">
+            {tasks.length === 0
+              ? "Для этой темы пока нет заданий в базе."
+              : `Задания закончились. Правильных ответов: ${sessionStats.correct} из ${sessionStats.total}.`}
+          </p>
+          <Link to="/topics" className="text-indigo-600 hover:underline text-sm">
+            ← Вернуться к темам
+          </Link>
+        </Card>
+
+        {history.length > 0 && (
+          <>
+            <h3 className="font-medium text-slate-700 dark:text-slate-200">Разбор заданий</h3>
+            {history.map((h, i) => (
+              <Card key={i}>
+                <div className="text-xs text-slate-400 mb-1">Задание {i + 1}</div>
+                <p className="whitespace-pre-line mb-3 text-slate-800 dark:text-slate-200">{h.task.text}</p>
+                <div
+                  className={`inline-block px-3 py-1.5 rounded-lg text-sm font-medium ${
+                    h.isCorrect
+                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                      : "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300"
+                  }`}
+                >
+                  {h.isCorrect
+                    ? "Верно ✅"
+                    : `Неверно. Ваш ответ: «${h.userAnswer}». Правильный ответ: ${formatAnswer(h.correctAnswer)}`}
+                </div>
+                {h.explanation && <p className="text-sm text-slate-500 mt-2">{h.explanation}</p>}
+              </Card>
+            ))}
+          </>
+        )}
+      </div>
     );
   }
 
@@ -123,7 +160,7 @@ export default function Practice() {
                   : "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300"
               }`}
             >
-              {result.is_correct ? "Верно! ✅" : `Неверно. Правильный ответ: ${result.correct_answer}`}
+              {result.is_correct ? "Верно! ✅" : `Неверно. Правильный ответ: ${formatAnswer(result.correct_answer)}`}
             </div>
             {result.explanation && (
               <p className="text-sm text-slate-500">{result.explanation}</p>
