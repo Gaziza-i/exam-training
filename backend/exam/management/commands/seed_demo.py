@@ -21,6 +21,7 @@ from exam.services.fipi_import import FipiImportError, import_tasks, load_tasks_
 FIPI_DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
 FIPI_BATCHES = [
     ("rus", FIPI_DATA_DIR / "fipi_rus_batch1.json"),
+    ("rus", FIPI_DATA_DIR / "fipi_rus_batch2.json"),
 ]
 
 RUS_TOPICS = [
