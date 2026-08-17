@@ -133,7 +133,8 @@ class ExamVariant(models.Model):
         return f"Вариант #{self.id} ({self.subject.code}, {self.status})"
 
 
-ESSAY_CRITERIA = [
+# Сочинение-рассуждение по прочитанному тексту (задание 27 КИМ ЕГЭ по русскому языку).
+ESSAY_CRITERIA_EGE = [
     {"code": "K1", "title": "Формулировка проблемы исходного текста"},
     {"code": "K2", "title": "Комментарий к проблеме"},
     {"code": "K3", "title": "Отражение позиции автора"},
@@ -148,11 +149,44 @@ ESSAY_CRITERIA = [
     {"code": "K12", "title": "Соблюдение фактологической точности"},
 ]
 
+# Итоговое сочинение (допуск к ЕГЭ) — оценивается "зачёт/незачёт".
+# Требование 1 и 2 обязательны; из критериев 1-5 «зачёт» нужен минимум по трём,
+# в том числе обязательно по критериям 1 и 2.
+ESSAY_CRITERIA_FINAL = [
+    {"code": "T1", "title": "Требование 1. Объём — не менее 250 слов"},
+    {"code": "T2", "title": "Требование 2. Самостоятельность написания"},
+    {"code": "C1", "title": "Критерий 1. Соответствие теме"},
+    {"code": "C2", "title": "Критерий 2. Аргументация. Привлечение литературного материала"},
+    {"code": "C3", "title": "Критерий 3. Композиция и логика рассуждения"},
+    {"code": "C4", "title": "Критерий 4. Качество письменной речи"},
+    {"code": "C5", "title": "Критерий 5. Грамотность"},
+]
+
+# Сохраняем старое имя для обратной совместимости (использовалось до разделения на два вида).
+ESSAY_CRITERIA = ESSAY_CRITERIA_EGE
+
+ESSAY_CRITERIA_BY_TYPE = {
+    "ege": ESSAY_CRITERIA_EGE,
+    "final": ESSAY_CRITERIA_FINAL,
+}
+
 
 class EssayAttempt(models.Model):
-    """Черновик сочинения + самопроверка по критериям К1–К12."""
+    """Черновик сочинения + самопроверка по критериям."""
 
-    source_text = models.TextField(blank=True, help_text="Исходный текст для сочинения (опционально)")
+    TYPE_EGE = "ege"
+    TYPE_FINAL = "final"
+
+    TYPE_CHOICES = [
+        (TYPE_EGE, "Сочинение ЕГЭ (задание 27)"),
+        (TYPE_FINAL, "Итоговое сочинение"),
+    ]
+
+    essay_type = models.CharField(max_length=10, choices=TYPE_CHOICES, default=TYPE_EGE)
+    source_text = models.TextField(
+        blank=True,
+        help_text="Исходный текст для сочинения ЕГЭ или тема — для итогового сочинения (опционально)",
+    )
     essay_text = models.TextField(blank=True)
     checklist = models.JSONField(
         default=dict,
@@ -163,4 +197,4 @@ class EssayAttempt(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Сочинение #{self.id} ({self.created_at:%Y-%m-%d})"
+        return f"Сочинение #{self.id} ({self.get_essay_type_display()}, {self.created_at:%Y-%m-%d})"

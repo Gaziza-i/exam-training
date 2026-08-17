@@ -6,7 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import ESSAY_CRITERIA, Attempt, EssayAttempt, ExamVariant, Subject, Task, Topic
+from .models import ESSAY_CRITERIA_BY_TYPE, Attempt, EssayAttempt, ExamVariant, Subject, Task, Topic
 from .serializers import (
     AttemptSerializer,
     EssayAttemptSerializer,
@@ -156,10 +156,19 @@ class EssayAttemptViewSet(viewsets.ModelViewSet):
     queryset = EssayAttempt.objects.all()
     serializer_class = EssayAttemptSerializer
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        essay_type = self.request.query_params.get("essay_type")
+        if essay_type:
+            qs = qs.filter(essay_type=essay_type)
+        return qs
+
 
 class EssayCriteriaView(APIView):
     def get(self, request):
-        return Response(ESSAY_CRITERIA)
+        essay_type = request.query_params.get("type", "ege")
+        criteria = ESSAY_CRITERIA_BY_TYPE.get(essay_type, ESSAY_CRITERIA_BY_TYPE["ege"])
+        return Response(criteria)
 
 
 class StatsView(APIView):

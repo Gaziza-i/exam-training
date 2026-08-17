@@ -48,8 +48,9 @@ export const api = {
   finishExamVariant: (id) => request(`/exam-variants/${id}/finish/`, { method: "POST" }),
   getExamVariant: (id) => request(`/exam-variants/${id}/`),
   stats: (subjectSlug) => request(`/stats/${subjectSlug ? `?subject=${subjectSlug}` : ""}`),
-  essayCriteria: () => request("/essay-criteria/"),
-  essays: () => request("/essays/"),
+  essayCriteria: (essayType = "ege") => request(`/essay-criteria/?type=${essayType}`),
+  essays: (essayType) =>
+    request(`/essays/${essayType ? `?essay_type=${essayType}` : ""}`),
   createEssay: (data) =>
     request("/essays/", { method: "POST", body: JSON.stringify(data) }),
   updateEssay: (id, data) =>

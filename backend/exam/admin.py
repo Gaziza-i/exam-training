@@ -36,4 +36,5 @@ class ExamVariantAdmin(admin.ModelAdmin):
 
 @admin.register(EssayAttempt)
 class EssayAttemptAdmin(admin.ModelAdmin):
-    list_display = ("id", "created_at", "updated_at")
+    list_display = ("id", "essay_type", "created_at", "updated_at")
+    list_filter = ("essay_type",)

@@ -1,6 +1,15 @@
 from rest_framework import serializers
 
-from .models import ESSAY_CRITERIA, Attempt, EssayAttempt, ExamVariant, Subject, Task, Topic
+from .models import (
+    ESSAY_CRITERIA_BY_TYPE,
+    ESSAY_CRITERIA_EGE,
+    Attempt,
+    EssayAttempt,
+    ExamVariant,
+    Subject,
+    Task,
+    Topic,
+)
 
 
 class SubjectSerializer(serializers.ModelSerializer):
@@ -90,7 +99,7 @@ class ExamVariantSerializer(serializers.ModelSerializer):
 class EssayAttemptSerializer(serializers.ModelSerializer):
     class Meta:
         model = EssayAttempt
-        fields = ["id", "source_text", "essay_text", "checklist", "created_at", "updated_at"]
+        fields = ["id", "essay_type", "source_text", "essay_text", "checklist", "created_at", "updated_at"]
 
 
 class EssayCriterionSerializer(serializers.Serializer):
@@ -98,5 +107,5 @@ class EssayCriterionSerializer(serializers.Serializer):
     title = serializers.CharField()
 
 
-def get_essay_criteria():
-    return ESSAY_CRITERIA
+def get_essay_criteria(essay_type="ege"):
+    return ESSAY_CRITERIA_BY_TYPE.get(essay_type, ESSAY_CRITERIA_EGE)
