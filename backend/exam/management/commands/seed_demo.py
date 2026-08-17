@@ -33,6 +33,7 @@ FIPI_BATCHES = [
     ("rus", FIPI_DATA_DIR / "fipi_rus_batch11.json"),
     ("rus", FIPI_DATA_DIR / "fipi_rus_batch12.json"),
     ("rus", FIPI_DATA_DIR / "fipi_rus_batch13.json"),
+    ("rus", FIPI_DATA_DIR / "fipi_rus_batch14.json"),
 ]
 
 RUS_TOPICS = [
