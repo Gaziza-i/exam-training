@@ -54,8 +54,7 @@ RUS_TOPICS = [
     (8, "Синтаксические нормы (грамматические ошибки)"),
     (9, "Правописание корней"),
     (10, "Правописание приставок"),
-    (11, "Правописание суффиксов"),
-    (12, "Правописание личных окончаний глаголов и суффиксов причастий"),
+    (11, "Правописание суффиксов и личных окончаний (задания №11-12)"),
     (13, "Слитное и раздельное написание НЕ"),
     (14, "Слитное, дефисное, раздельное написание слов"),
     (15, "Правописание Н и НН в разных частях речи"),
@@ -240,16 +239,14 @@ RUS_TASKS = {
             options=["рассказывать", "докладывать", "проповедывать", "участвовать"],
             correct_answer="проповедывать",
             explanation="Правильно — «проповедовать» (суффикс -ова-, т.к. в 1-м лице ед. ч. — «проповедую», без -ыва-/-ива-).",
-        )
-    ],
-    12: [
+        ),
         dict(
             text="Найдите слово с ошибкой в написании личного окончания глагола: «он дышит», «они дышут», «ты пишешь», «вы стелете».",
             task_type="choice",
             options=["он дышит", "они дышут", "ты пишешь", "вы стелете"],
             correct_answer="они дышут",
             explanation="«Дышать» — глагол II спряжения (исключение), правильно «они дышат».",
-        )
+        ),
     ],
     13: [
         dict(
@@ -653,6 +650,11 @@ class Command(BaseCommand):
             )
             if created:
                 topics_created += 1
+            elif topic.title != title:
+                # Название темы могло измениться (например, объединение тем) —
+                # держим его в актуальном состоянии и на уже засеянных базах.
+                topic.title = title
+                topic.save(update_fields=["title"])
             for task_data in tasks_by_number.get(number, []):
                 _, was_created = Task.objects.get_or_create(
                     topic=topic,
@@ -668,4 +670,19 @@ class Command(BaseCommand):
                 )
                 if was_created:
                     tasks_created += 1
-        self.stdout.write(f"{subject.name}: тем создано {topics_created}, заданий создано {tasks_created}")
+
+        # Темы, которых больше нет в справочнике (например, объединённые с другой
+        # темой), могли остаться в уже засеянных базах — убираем такие темы, если
+        # на них не висит ни одного задания (иначе оставляем, чтобы не терять данные).
+        current_numbers = {number for number, _ in topics}
+        orphaned = Topic.objects.filter(subject=subject).exclude(task_number__in=current_numbers)
+        removed = 0
+        for topic in orphaned:
+            if not Task.objects.filter(topic=topic).exists():
+                topic.delete()
+                removed += 1
+
+        self.stdout.write(
+            f"{subject.name}: тем создано {topics_created}, заданий создано {tasks_created}"
+            + (f", устаревших пустых тем удалено {removed}" if removed else "")
+        )
